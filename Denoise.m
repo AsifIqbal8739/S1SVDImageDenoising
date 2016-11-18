@@ -7,10 +7,9 @@ function [Im_DN,D_] = Denoise(Im_N,Sigma,K,n,Algo)
 Reduce_DC = 1;
 [N1,N2] = size(Im_N);
 C = 1.15;                       % Taken from the Paper Elad 06
-waitBarOn = 0;                  % To show display bar
 E_T = C*Sigma;                  % Required Average target Error in OMP
 if Sigma > 5
-    noIt = 20;
+    noIt = 10;
 else
     noIt = 5;
 end
@@ -46,18 +45,21 @@ if (Reduce_DC)
     Y = Y-ones(size(Y,1),1)*vecOfMeans;
 end
 
+%% Data Whitening
+% Y = Data_Whiten(Y,1);
+
 %% Going into Dictionary Learning Algo for Training
 D_ = normc(D_DCT);
 for it = 1:noIt 
-    W = omp2(D_,Y,D_'*D_,(n*E_T));    
+    W = omp2(D_,Y,D_'*D_,(n*E_T));    %
     switch lower(Algo)
         case 'ksvd'
             [D_,W] = Optimize_K_SVD(Y,D_,W);
         case 's1'
-            alpha = 2.5;    
+            alpha = .37;    
             [D_,W] = Optimize_S1(Y,D_,W,alpha);
         case 's1svd'
-            alpha = 0.01;    gamma = 1;
+            alpha = 100;    gamma = 1;
             [D_,W] = Optimize_S1SVD(Y,D_,W,alpha,gamma);        
         otherwise
             error('Invalid Learning Method Specified');
@@ -66,14 +68,21 @@ for it = 1:noIt
     D_ = I_clearDictionary(D_,W,Y);
     disp(['Iteration # ',num2str(it),' With average number of Coefficients = ',num2str(nnz(W)/size(W,2))])
 end 
+
 %% DEnoising with the Trained Dictionary
 disp('Denoising with the Trained Dictionary')
+Y = im2col(Im_N,[n,n],'sliding'); 
+if (Reduce_DC)
+    vecOfMeans = mean(Y);
+    Y = Y-ones(size(Y,1),1)*vecOfMeans;
+end
 Coefs = omp2(D_,Y,D_'*D_,(n*E_T));
 if (Reduce_DC)
     Y = D_*Coefs + ones(size(Y,1),1) * vecOfMeans;
 else
     Y = D_*Coefs;
 end
+
 %% Generation and Averaging of The signal from Y (columns)
 count = 1;
 Weight= zeros(N1,N2);
@@ -110,15 +119,17 @@ function [D,W] = Optimize_S1(Y,D,W,alpha)
     for k = 1:size(D,2)       
         Eki = Ek + D(:,k)*W(k,:);
         for j = 1:2
-            G = D(:,k)'*Eki;    alpha2 = std(G)*alpha;
-            W(k,:) = sign(G).*max(0,abs(G)-alpha2);
+            G = D(:,k)'*Eki;   g = std(G);  G = G./g; % std = 1
+            %alpha2 = std(G)*alpha;
+            W(k,:) = g.*sign(G).*max(0,abs(G)-alpha);
             D(:,k) = (Eki * W(k,:)')/norm(Eki * W(k,:)');
         end
+%         nnz(W(k,:))
         Ek = Eki - D(:,k)*W(k,:);
     end
 end
 
-% S1 WIth SVD Dictionary Update Stage
+%% S1 WIth SVD Dictionary Update Stage
 function [D,W] = Optimize_S1SVD(Y,D,W,alpha,gamma)
     Ek = Y - D * W;
     for k = 1:size(D,2)       
@@ -127,14 +138,17 @@ function [D,W] = Optimize_S1SVD(Y,D,W,alpha,gamma)
 %         [D(:,k),s,v] = svds(Eki,1,'L');
 %         W(k,:) = s*v';
         % Power Iteration
-        for i = 1:10
+        for i = 1:5
             W(k,:) = D(:,k)'*Eki;
             D(:,k) = Eki*W(k,:)';    D(:,k) = D(:,k)/norm(D(:,k));  
         end
-        for j = 1:2            
-            W(k,:) = sign(D(:,k)'*Eki).*max(0,(abs(D(:,k)'*Eki) - alpha./(abs(W(k,:)).^gamma)));
+        for j = 1:2     
+            G = D(:,k)'*Eki;  g=1; %g = std(G);  G = G./g;    
+            alpha2 = std(G)*alpha;
+            W(k,:) = g.* sign(G).*max(0,(abs(G) - g.* alpha2./(abs(W(k,:)))));  %.^gamma
             D(:,k) = Eki*W(k,:)'/norm(Eki*W(k,:)');
         end
+%             nnz(W(k,:))
         Ek = Eki - D(:,k)*W(k,:);
     end
 end
